@@ -80,6 +80,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
             request["instructions"] = base_instructions
+        request = self._merge_system_input_items_into_instructions(request)
         request["store"] = False
         request["stream"] = True
         include = list(request.get("include") or [])
@@ -102,6 +103,40 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    @staticmethod
+    def _extract_text_from_responses_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    if block.get("type") in ("input_text", "output_text", "text", "summary_text"):
+                        parts.append(block["text"])
+            return "\n".join(part for part in parts if part)
+        return ""
+
+    def _merge_system_input_items_into_instructions(self, request: dict) -> dict:
+        input_items = request.get("input")
+        if not isinstance(input_items, list):
+            return request
+        system_texts: list[str] = []
+        kept_items: list[Any] = []
+        for item in input_items:
+            if isinstance(item, dict) and item.get("role") in ("system", "developer"):
+                text = self._extract_text_from_responses_content(item.get("content"))
+                if text:
+                    system_texts.append(text)
+                continue
+            kept_items.append(item)
+        if not system_texts:
+            return request
+        request["input"] = kept_items
+        existing_instructions = request.get("instructions")
+        separator = "\n\n" if existing_instructions else ""
+        request["instructions"] = f"{existing_instructions}{separator}{'\n\n'.join(system_texts)}"
+        return request
 
     def transform_response_api_response(
         self,

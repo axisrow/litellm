@@ -290,6 +290,61 @@ class TestChatGPTResponsesAPITransformation:
 
         assert parsed.output_text == "Recovered from padded"
 
+    def test_chatgpt_moves_system_input_items_into_instructions(self):
+        """The Codex backend rejects system/developer input items ("System
+        messages are not allowed"). Claude Code sends system content as a list
+        of blocks, which the chat->responses bridge passes through as input
+        items, so the ChatGPT config must fold them into instructions.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": "First system rule."},
+                        {"type": "input_text", "text": "Second system rule."},
+                    ],
+                },
+                {"type": "message", "role": "developer", "content": "Developer rule."},
+                {"type": "message", "role": "user", "content": "Reply with exactly: OK"},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        roles = [item["role"] for item in request["input"]]
+        assert roles == ["user"]
+        assert request["input"][0]["content"] == "Reply with exactly: OK"
+
+        instructions = request["instructions"]
+        assert instructions.startswith("You are Codex, based on GPT-5.")
+        assert "First system rule." in instructions
+        assert "Second system rule." in instructions
+        assert "Developer rule." in instructions
+
+    def test_chatgpt_keeps_string_system_content_out_of_input(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[
+                {"type": "message", "role": "system", "content": "String system rule."},
+                {"type": "message", "role": "user", "content": "hi"},
+            ],
+            response_api_optional_request_params={
+                "instructions": "Existing instructions.",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert [item["role"] for item in request["input"]] == ["user"]
+        assert "String system rule." in request["instructions"]
+        assert "Existing instructions." in request["instructions"]
+
     @pytest.mark.parametrize(
         "error_chunk",
         [
